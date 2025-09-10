@@ -300,6 +300,103 @@ public class MeasurementsControllerTests : TestBase
             .Which.StatusCode.Should().Be(500);
     }
 
+    [Fact]
+    public async Task GetMeasurementsBySharingCode_WithValidStartDate_AppliesStartDateFilter()
+    {
+        // Arrange
+        var userId = Guid.NewGuid();
+        var sharingCode = "test-sharing-code";
+        var startDate = "2024-01-15";
+        var user = CreateTestProfile(userId);
+        user.Profile.SharingEnabled = true;
+        user.Profile.SharingToken = sharingCode;
+        var sourceData = CreateTestSourceData();
+
+        ProfileData capturedProfile = null;
+        _profileServiceMock.Setup(x => x.GetBySharingTokenAsync(sharingCode)).ReturnsAsync(user);
+        _providerIntegrationServiceMock.Setup(x => x.GetActiveProvidersAsync(userId))
+            .ReturnsAsync(new List<string> { "withings" });
+        _measurementSyncServiceMock.Setup(x => x.GetMeasurementsForUserAsync(userId,
+                It.IsAny<List<string>>(), user.Profile.UseMetric))
+            .ReturnsAsync(new MeasurementsResult
+            {
+                Data = sourceData,
+                ProviderStatus = new Dictionary<string, ProviderSyncStatus>()
+            });
+        _measurementComputationServiceMock.Setup(x => x.ComputeMeasurements(sourceData, It.IsAny<ProfileData>()))
+            .Callback<List<SourceData>, ProfileData>((_, profile) => capturedProfile = profile)
+            .Returns(new List<ComputedMeasurement>());
+
+        // Act
+        var result = await _sut.GetMeasurementsBySharingCode(sharingCode, start_date: startDate);
+
+        // Assert
+        result.Should().NotBeNull();
+        result.Result.Should().BeOfType<OkObjectResult>();
+        capturedProfile.Should().NotBeNull();
+        capturedProfile.Should().BeOfType<ProfileDataWithStartDateFilter>();
+        capturedProfile.HideDataBeforeStart.Should().BeTrue();
+        capturedProfile.GoalStart.Should().Be(new DateTime(2024, 1, 15));
+    }
+
+    [Fact]
+    public async Task GetMeasurementsBySharingCode_WithInvalidStartDate_ReturnsBadRequest()
+    {
+        // Arrange
+        var sharingCode = "test-sharing-code";
+        var invalidStartDate = "invalid-date";
+
+        // Act
+        var result = await _sut.GetMeasurementsBySharingCode(sharingCode, start_date: invalidStartDate);
+
+        // Assert
+        result.Result.Should().BeOfType<BadRequestObjectResult>()
+            .Which.Value.Should().BeOfType<ErrorResponse>()
+            .Which.Error.Should().Be("Invalid start_date format. Expected YYYY-MM-DD.");
+    }
+
+    [Fact]
+    public async Task GetMeasurementsBySharingCode_WithStartDateAndExistingFilter_UsesMaxDate()
+    {
+        // Arrange
+        var userId = Guid.NewGuid();
+        var sharingCode = "test-sharing-code";
+        var startDate = "2024-01-15";
+        var user = CreateTestProfile(userId);
+        user.Profile.SharingEnabled = true;
+        user.Profile.SharingToken = sharingCode;
+        user.Profile.HideDataBeforeStart = true;
+        user.Profile.GoalStart = new DateTime(2024, 2, 1); // Later than start_date
+        var sourceData = CreateTestSourceData();
+
+        ProfileData capturedProfile = null;
+        _profileServiceMock.Setup(x => x.GetBySharingTokenAsync(sharingCode)).ReturnsAsync(user);
+        _providerIntegrationServiceMock.Setup(x => x.GetActiveProvidersAsync(userId))
+            .ReturnsAsync(new List<string> { "withings" });
+        _measurementSyncServiceMock.Setup(x => x.GetMeasurementsForUserAsync(userId,
+                It.IsAny<List<string>>(), user.Profile.UseMetric))
+            .ReturnsAsync(new MeasurementsResult
+            {
+                Data = sourceData,
+                ProviderStatus = new Dictionary<string, ProviderSyncStatus>()
+            });
+        _measurementComputationServiceMock.Setup(x => x.ComputeMeasurements(sourceData, It.IsAny<ProfileData>()))
+            .Callback<List<SourceData>, ProfileData>((_, profile) => capturedProfile = profile)
+            .Returns(new List<ComputedMeasurement>());
+
+        // Act
+        var result = await _sut.GetMeasurementsBySharingCode(sharingCode, start_date: startDate);
+
+        // Assert
+        result.Should().NotBeNull();
+        result.Result.Should().BeOfType<OkObjectResult>();
+        capturedProfile.Should().NotBeNull();
+        capturedProfile.Should().BeOfType<ProfileDataWithStartDateFilter>();
+        // Should use the later date (profile's existing GoalStart)
+        capturedProfile.GoalStart.Should().Be(new DateTime(2024, 2, 1));
+    }
+    }
+
     #endregion
 
     #region Multiple Providers Tests

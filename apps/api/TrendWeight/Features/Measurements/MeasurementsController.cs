@@ -6,6 +6,7 @@ using TrendWeight.Features.Providers;
 using TrendWeight.Features.Measurements.Models;
 using TrendWeight.Common.Models;
 using TrendWeight.Features.Common;
+using TrendWeight.Features.Profile.Models;
 
 namespace TrendWeight.Features.Measurements;
 
@@ -114,13 +115,15 @@ public class MeasurementsController : ControllerBase
     /// <param name="sharingCode">The sharing code</param>
     /// <param name="progressId">Optional progress ID for tracking sync status</param>
     /// <param name="includeSource">Whether to include raw source data in response</param>
+    /// <param name="start_date">Optional start date to filter measurements (YYYY-MM-DD format)</param>
     /// <returns>MeasurementsResponse with computed measurements and optionally source data</returns>
     [HttpGet("{sharingCode}")]
     [AllowAnonymous]
     public async Task<ActionResult<MeasurementsResponse>> GetMeasurementsBySharingCode(
         string sharingCode,
         [FromQuery] string? progressId = null,
-        [FromQuery] bool includeSource = false)
+        [FromQuery] bool includeSource = false,
+        [FromQuery] string? start_date = null)
     {
         try
         {
@@ -156,9 +159,25 @@ public class MeasurementsController : ControllerBase
                 activeProviders,
                 user.Profile.UseMetric);
 
+            // Apply start_date filter if provided
+            ProfileData profileToUse = user.Profile;
+            if (!string.IsNullOrEmpty(start_date))
+            {
+                if (DateTime.TryParseExact(start_date, "yyyy-MM-dd", null, System.Globalization.DateTimeStyles.None, out var startDate))
+                {
+                    profileToUse = new ProfileDataWithStartDateFilter(user.Profile, startDate);
+                    _logger.LogInformation("Applied start_date filter: {StartDate} for sharing code: {SharingCode}", startDate.ToString("yyyy-MM-dd"), sharingCode);
+                }
+                else
+                {
+                    _logger.LogWarning("Invalid start_date format: {StartDate}, expected YYYY-MM-DD", start_date);
+                    return BadRequest(new ErrorResponse { Error = "Invalid start_date format. Expected YYYY-MM-DD." });
+                }
+            }
+
             // Compute measurements from source data
             var computedMeasurements = _measurementComputationService
-                .ComputeMeasurements(result.Data, user.Profile);
+                .ComputeMeasurements(result.Data, profileToUse);
 
             // Always return isMe = false when using sharing code
             // This allows users to preview how their dashboard appears to others
